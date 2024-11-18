@@ -1,0 +1,74 @@
+# Input source for logs from microservices
+<source>
+  @type forward
+  @id input_forward
+  port 24224
+  bind 0.0.0.0
+</source>
+
+<match **>
+  @type stdout
+  format_type json
+</match>
+
+
+# Input source for Kafka topics
+<source>
+  @type kafka
+  brokers kafka:9092
+  topics service_logs,service_heartbeats,service_registrations
+  format json
+  tag kafka.logs
+</source>
+
+<match service.**>
+  @type copy
+  
+  <store>
+    @type kafka2
+    brokers kafka:9092
+    topic service_logs
+    
+    # Only send if message_type is LOG
+    <inject>
+      tag_key @log_name
+    </inject>
+    
+    <buffer>
+      @type memory
+      flush_interval 3s
+    </buffer>
+  </store>
+  
+  <store>
+    @type kafka2
+    brokers kafka:9092
+    topic service_heartbeats
+    
+    # Only send if message_type is HEARTBEAT
+    <inject>
+      tag_key @log_name
+    </inject>
+    
+    <buffer>
+      @type memory
+      flush_interval 3s
+    </buffer>
+  </store>
+  
+  <store>
+    @type kafka2
+    brokers kafka:9092
+    topic service_registrations
+    
+    # Only send if message_type is REGISTRATION
+    <inject>
+      tag_key @log_name
+    </inject>
+    
+    <buffer>
+      @type memory
+      flush_interval 3s
+    </buffer>
+  </store>
+</match>

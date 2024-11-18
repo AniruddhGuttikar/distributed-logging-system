@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from core.log_accumulator import LogAccumulator
 from utils.logger import ServiceLogger
+import random
 
 class BaseService:
     def __init__(self, service_name):
@@ -26,14 +27,23 @@ class BaseService:
     def send_heartbeat(self):
         while self.running:
             try:
+                status = "DOWN" if random.random() < 0.1 else "UP"
+
                 heartbeat_data = {
                     "node_id": self.node_id,
                     "message_type": "HEARTBEAT",
                     "service_name": self.service_name,
-                    "status": "UP",
+                    "status": status,
                     "timestamp": datetime.utcnow().isoformat()
                 }
+                
                 self.log_accumulator.send_log(heartbeat_data)
+                
+                # If status is DOWN, stop the service
+                if status == "DOWN":
+                    self.logger.error(f"Service {self.service_name} is DOWN. Stopping service.")
+                    self.stop()
+                    break  # Exit the loop after stopping the service
                 time.sleep(10)  # Heartbeat interval
             except Exception as e:
                 self.logger.error(f"Failed to send heartbeat: {str(e)}")

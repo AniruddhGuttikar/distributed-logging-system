@@ -1,59 +1,101 @@
-import json
-import threading
 from kafka import KafkaConsumer
+import json
+from datetime import datetime
 from config.kafka_config import KAFKA_CONFIG
 from utils.logger import ServiceLogger
 
-class AlertingSystem:
+class AlertSystem:
     def __init__(self):
-        self.logger = ServiceLogger('AlertingSystem')
+        self.logger = ServiceLogger("AlertSystem")
+        
+        # Initialize Kafka consumer for logs and heartbeats
         self.consumer = KafkaConsumer(
             KAFKA_CONFIG['log_topic'],
+            KAFKA_CONFIG['heartbeat_topic'],
             bootstrap_servers=KAFKA_CONFIG['bootstrap_servers'],
             value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-            group_id='alerting_system_group'
+            auto_offset_reset='earliest',
+            enable_auto_commit=True,
+            group_id='alert_system_group'
         )
-        self.running = False
         
-    def start(self):
-        self.running = True
-        self.alert_thread = threading.Thread(target=self._monitor_logs)
-        self.alert_thread.start()
+        # Track service status
+        self.service_status = {}
+    
+    def _process_error_log(self, message):
+        """Process ERROR level logs"""
+        if message.get('log_level') == 'ERROR' and message.get('message_type') == 'LOG':
+            alert_msg = (
+                f"⚠️ ERROR LOG ALERT\n"
+                f"Service: {message.get('service_name')}\n"
+                f"Message: {message.get('message')}\n"
+                f"Node ID: {message.get('node_id')}\n"
+                f"Timestamp: {message.get('timestamp')}"
+            )
+            self.logger.error(alert_msg, 
+                            service_name=message.get('service_name'),
+                            node_id=message.get('node_id'))
+    
+    def _process_heartbeat(self, message):
+        """Process heartbeat messages and detect DOWN status"""
+        service_name = message.get('service_name')
+        node_id = message.get('node_id')
+        status = message.get('status')
         
-    def stop(self):
-        self.running = False
-        self.alert_thread.join()
-        self.consumer.close()
+        # Update service status
+        key = f"{service_name}:{node_id}"
+        prev_status = self.service_status.get(key)
+        self.service_status[key] = status
         
-    def _monitor_logs(self):
-        while self.running:
-            try:
-                for message in self.consumer:
-                    if not self.running:
-                        break
+        # Alert on status change to DOWN
+        if status == 'DOWN' and prev_status != 'DOWN':
+            alert_msg = (
+                f"🔴 SERVICE DOWN ALERT\n"
+                f"Service: {service_name}\n"
+                f"Node ID: {node_id}\n"
+                f"Status: {status}\n"
+                f"Timestamp: {message.get('timestamp')}"
+            )
+            self.logger.error(alert_msg,
+                            service_name=service_name,
+                            node_id=node_id,
+                            status=status)
+        
+        # Log recovery
+        elif status == 'UP' and prev_status == 'DOWN':
+            recovery_msg = (
+                f"🟢 SERVICE RECOVERED\n"
+                f"Service: {service_name}\n"
+                f"Node ID: {node_id}\n"
+                f"Status: {status}\n"
+                f"Timestamp: {message.get('timestamp')}"
+            )
+            self.logger.info(recovery_msg,
+                           service_name=service_name,
+                           node_id=node_id,
+                           status=status)
+    
+    def start_monitoring(self):
+        """Start monitoring for alerts"""
+        try:
+            self.logger.info("Alert system started monitoring...")
+            for message in self.consumer:
+                try:
+                    data = message.value
                     
-                    log_data = message.value
-                    if log_data.get('log_level') in ['ERROR', 'FATAL']:
-                        self._handle_critical_log(log_data)
-                    elif log_data.get('log_level') == 'WARN':
-                        self._handle_warning_log(log_data)
-            except Exception as e:
-                self.logger.error(f"Error monitoring logs: {str(e)}")
-                
-    def _handle_critical_log(self, log_data):
-        alert_message = (
-            f"🚨 CRITICAL ALERT 🚨\n"
-            f"Service: {log_data.get('service_name')}\n"
-            f"Level: {log_data.get('log_level')}\n"
-            f"Message: {log_data.get('message')}\n"
-            f"Error Details: {log_data.get('error_details', 'N/A')}"
-        )
-        print(alert_message)  # In real system, could send to Slack, email, etc.
-        
-    def _handle_warning_log(self, log_data):
-        alert_message = (
-            f"⚠️ WARNING ALERT ⚠️\n"
-            f"Service: {log_data.get('service_name')}\n"
-            f"Message: {log_data.get('message')}"
-        )
-        print(alert_message)  
+                    if message.topic == KAFKA_CONFIG['log_topic']:
+                        self._process_error_log(data)
+                    elif message.topic == KAFKA_CONFIG['heartbeat_topic']:
+                        self._process_heartbeat(data)
+                        
+                except Exception as e:
+                    self.logger.error(f"Error processing message: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"Fatal error in alert system: {str(e)}")
+            raise
+            
+        finally:
+            self.consumer.close()
+
