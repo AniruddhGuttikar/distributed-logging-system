@@ -95,7 +95,7 @@ class ElasticsearchConsumer:
                 try:
                     # Get the appropriate index name based on topic
                     self.logger.info(f"subscribed to message {message.topic}")
-                    print("received message")
+                    # print("received message")
                     index_name = self._get_index_name(message.topic)
                     if not index_name:
                         self.logger.error(f"Unknown topic: {message.topic}")
@@ -111,6 +111,7 @@ class ElasticsearchConsumer:
                     self.logger.info(f"Indexed document in {index_name}", 
                                    document_id=response['_id'],
                                    index=index_name)
+                    print(json.dumps(message.value, indent=4))
                 
                 except Exception as e:
                     self.logger.error(f"Error processing message: {str(e)}")

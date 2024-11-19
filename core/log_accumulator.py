@@ -33,6 +33,7 @@ class LogAccumulator:
             #     if (log_data['log_level'] == "ERROR"):
             #         self.logger.error(log_data)
             print(json.dumps(log_data, indent=4))
+            
             self.fluent_logger.emit(None, log_data)
         except Exception as e:
             self.logger.error(f"Failed to send log: {str(e)}")
