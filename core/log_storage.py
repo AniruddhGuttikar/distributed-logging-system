@@ -1,4 +1,3 @@
-# elasticsearch_consumer.py
 from kafka import KafkaConsumer
 from elasticsearch import Elasticsearch
 import json
@@ -70,6 +69,17 @@ class ElasticsearchConsumer:
                         'timestamp': {'type': 'date'}
                     }
                 }
+            },
+            'microservice_registry': {
+                'mappings': {
+                    'properties': {
+                        'message_type': {'type': 'keyword'},
+                        'node_id': {'type': 'keyword'},
+                        'service_name': {'type': 'keyword'},
+                        'status': {'type': 'keyword'},
+                        'timestamp': {'type': 'date'}
+                    }
+                }
             }
         }
         
@@ -77,7 +87,62 @@ class ElasticsearchConsumer:
             if not self.es.indices.exists(index=index_name):
                 self.es.indices.create(index=index_name, body=mapping)
                 self.logger.info(f"Created index: {index_name}")
-    
+
+    def _update_registry_status(self, node_id: str, new_status: str):
+        """Update the status of a node in the microservice registry"""
+        try:
+            # Search for the existing document
+            search_result = self.es.search(
+                index='microservice_registry',
+                body={
+                    'query': {
+                        'term': {
+                            'node_id': node_id
+                        }
+                    }
+                }
+            )
+
+            if search_result['hits']['total']['value'] > 0:
+                # Get the document ID
+                doc_id = search_result['hits']['hits'][0]['_id']
+                
+                # Update the document
+                self.es.update(
+                    index='microservice_registry',
+                    id=doc_id,
+                    body={
+                        'doc': {
+                            'status': new_status,
+                            'timestamp': datetime.utcnow().isoformat()
+                        }
+                    }
+                )
+                self.logger.info(f"Updated status for node {node_id} to {new_status}")
+
+        except Exception as e:
+            self.logger.error(f"Error updating registry status: {str(e)}")
+
+    def _handle_registration(self, message_value: dict):
+        """Handle registration message by storing in microservice_registry"""
+        try:
+            # Use node_id as document ID to ensure one record per node
+            self.es.index(
+                index='microservice_registry',
+                document={
+                    'message_type': 'REGISTRATION',
+                    'node_id': message_value['node_id'],
+                    'service_name': message_value['service_name'],
+                    'status': message_value['status'],
+                    'timestamp': message_value['timestamp']
+                },
+                id=message_value['node_id']
+            )
+            self.logger.info(f"Registered node {message_value['node_id']} in registry")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling registration: {str(e)}")
+
     def _get_index_name(self, topic: str) -> str:
         """Map Kafka topic to Elasticsearch index name"""
         topic_to_index = {
@@ -93,26 +158,30 @@ class ElasticsearchConsumer:
             self.logger.info("Started consuming messages...")
             for message in self.consumer:
                 try:
-                    # Get the appropriate index name based on topic
-                    self.logger.info(f"subscribed to message {message.topic}")
-                    # print("received message")
+                    message_value = message.value
+                    
+                    # Handle registration messages
+                    if message.topic == KAFKA_CONFIG['registration_topic']:
+                        self._handle_registration(message_value)
+                    
+                    # Handle heartbeat DOWN messages
+                    elif (message.topic == KAFKA_CONFIG['heartbeat_topic'] and 
+                          message_value.get('status') == 'DOWN'):
+                        self._update_registry_status(message_value['node_id'], 'DOWN')
+                    
+                    # Get the appropriate index name and store in original index
                     index_name = self._get_index_name(message.topic)
-                    if not index_name:
-                        self.logger.error(f"Unknown topic: {message.topic}")
-                        continue
+                    if index_name:
+                        response = self.es.index(
+                            index=index_name,
+                            document=message_value,
+                            id=message_value.get('log_id') or message_value.get('node_id')
+                        )
+                        
+                        self.logger.info(f"Indexed document in {index_name}", 
+                                       document_id=response['_id'],
+                                       index=index_name)
                     
-                    # Index the document
-                    response = self.es.index(
-                        index=index_name,
-                        document=message.value,
-                        id=message.value.get('log_id') or message.value.get('node_id')
-                    )
-                    
-                    self.logger.info(f"Indexed document in {index_name}", 
-                                   document_id=response['_id'],
-                                   index=index_name)
-                    print(json.dumps(message.value, indent=4))
-                
                 except Exception as e:
                     self.logger.error(f"Error processing message: {str(e)}")
                     continue
