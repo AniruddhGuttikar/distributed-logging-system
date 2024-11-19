@@ -5,6 +5,8 @@ from datetime import datetime
 from core.log_accumulator import LogAccumulator
 from utils.logger import ServiceLogger
 import random
+import os
+import sys
 
 class BaseService:
     def __init__(self, service_name):
@@ -23,11 +25,15 @@ class BaseService:
             "timestamp": datetime.utcnow().isoformat()
         }
         self.log_accumulator.send_log(registration_data)
+        self.logger.info(f"Service {self.service_name} registered.")
         
-    def send_heartbeat(self):
+    def send_heartbeat(self, status='UP'):
+        """Continuously send heartbeat messages."""
         while self.running:
             try:
-                status = "DOWN" if random.random() < 0.1 else "UP"
+                if status == 'UP':
+                    # Simulate random failures
+                    status = "DOWN" if random.random() < 0.1 else "UP"
 
                 heartbeat_data = {
                     "node_id": self.node_id,
@@ -38,23 +44,31 @@ class BaseService:
                 }
                 
                 self.log_accumulator.send_log(heartbeat_data)
-                
-                # If status is DOWN, stop the service
+
                 if status == "DOWN":
-                    self.logger.error(f"Service {self.service_name} is DOWN. Stopping service.")
+                    self.logger.error(f"Service {self.service_name} is DOWN.")
                     self.stop()
-                    break  # Exit the loop after stopping the service
-                time.sleep(10)  # Heartbeat interval
+                    break  # Exit the heartbeat loop on failure
+                time.sleep(10)
             except Exception as e:
                 self.logger.error(f"Failed to send heartbeat: {str(e)}")
                 
     def start(self):
+        """Start the service with registration."""
         self.running = True
         self.register_service()
+        self._start_no_reg()
+        
+    def _start_no_reg(self):
+        """Start the service without re-registering."""
+        self.running = True
         self.heartbeat_thread = threading.Thread(target=self.send_heartbeat)
+        self.heartbeat_thread.daemon = True  # Ensures it doesn't block exit
         self.heartbeat_thread.start()
         
     def stop(self):
+        """Stop the service and wait for the thread to terminate."""
         self.running = False
-        if hasattr(self, 'heartbeat_thread'):
+        if hasattr(self, 'heartbeat_thread') and self.heartbeat_thread.is_alive():
             self.heartbeat_thread.join()
+        self.logger.info(f"Service {self.service_name} stopped.")

@@ -181,6 +181,7 @@ class ElasticsearchConsumer:
                         self.logger.info(f"Indexed document in {index_name}", 
                                        document_id=response['_id'],
                                        index=index_name)
+                        self.logger.info(message_value)
                     
                 except Exception as e:
                     self.logger.error(f"Error processing message: {str(e)}")
